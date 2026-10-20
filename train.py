@@ -1,4 +1,3 @@
-
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -15,18 +14,19 @@ data = torch.tensor([stoi[c] for c in text], device=device)
 V = len(chars)  # Vocabulary size
 T = 64          # Context length
 B = 16          # Batch size
+C = 96          # Embedding size
 
 # Tiny causal Transformer
 class TinyGPT(nn.Module):
     def __init__(self):
         super().__init__()
-        self.token = nn.Embedding(V, 96)
-        self.position = nn.Embedding(T, 96)
+        self.token = nn.Embedding(V, C)
+        self.position = nn.Embedding(T, C)
 
         layer = nn.TransformerEncoderLayer(
-            d_model=96,
+            d_model=C,
             nhead=4,
-            dim_feedforward=384,
+            dim_feedforward=4 * C,
             dropout=0.0,
             batch_first=True,
             norm_first=True,
@@ -34,16 +34,15 @@ class TinyGPT(nn.Module):
         self.transformer = nn.TransformerEncoder(
             layer, num_layers=2, enable_nested_tensor=False
         )
-        self.head = nn.Linear(96, V)
+        self.head = nn.Linear(C, V)
 
     def forward(self, x):
         t = x.shape[1]
         h = self.token(x) + self.position(
             torch.arange(t, device=x.device)
         )
-        mask = torch.triu(
-            torch.ones(t, t, device=x.device, dtype=torch.bool),
-            diagonal=1,
+        mask = nn.Transformer.generate_square_subsequent_mask(
+            t, device=x.device
         )
         return self.head(self.transformer(h, mask=mask))
 
@@ -55,10 +54,9 @@ print("Parameters:", sum(p.numel() for p in model.parameters()))
 
 # Training loop
 for step in range(301):
-    ix = torch.randint(len(data) - T - 1, (B,), device=device)
-    offsets = torch.arange(T, device=device)
-    x = data[ix[:, None] + offsets]
-    y = data[ix[:, None] + offsets + 1]
+    ix = torch.randint(len(data) - T, (B,), device=device)
+    chunk = data[ix[:, None] + torch.arange(T + 1, device=device)]
+    x, y = chunk[:, :-1], chunk[:, 1:]
 
     logits = model(x)
     loss = F.cross_entropy(logits.reshape(-1, V), y.reshape(-1))
